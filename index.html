@@ -1,234 +1,338 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI vs. Human Content Detector</title>
-    <!-- Tailwind CSS CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Google Fonts - Inter -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-        /* Custom styles for the body to ensure Inter font is applied */
-        body {
-            font-family: 'Inter', sans-serif;
-            margin: 0;
-            padding: 0;
+import React, { useState, useEffect, useRef } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, addDoc, serverTimestamp } from 'firebase/firestore';
+
+// Main App Component
+const App = () => {
+    // Firebase State
+    const [db, setDb] = useState(null);
+    const [auth, setAuth] = useState(null);
+    const [userId, setUserId] = useState(null);
+    const [isAuthReady, setIsAuthReady] = useState(false); // To ensure Firebase auth is ready before operations
+
+    // Application State
+    const [imageUrl, setImageUrl] = useState(''); // The image URL to be displayed
+    const [isAIImage, setIsAIImage] = useState(false); // True if current image is AI, false if human
+    const [score, setScore] = useState(0); // User's correct answers
+    const [totalQuestions, setTotalQuestions] = useState(0); // Total questions attempted
+    const [feedback, setFeedback] = useState(''); // Feedback message (correct/incorrect)
+    const [showAnswer, setShowAnswer] = useState(false); // Whether to show the correct answer
+    const [isLoading, setIsLoading] = useState(false); // Loading state for API calls/image gen
+    const [isSaving, setIsSaving] = useState(false); // Saving state for Firestore
+
+    // Ref for the message box
+    const messageBoxRef = useRef(null);
+
+    // Pre-defined human-created image URLs (using placeholder images for demonstration)
+    const humanImageUrls = [
+        "https://placehold.co/400x300/e0e0e0/555555?text=Human+Art+1",
+        "https://placehold.co/400x300/d0d0d0/444444?text=Human+Photo+2",
+        "https://placehold.co/400x300/c0c0c0/333333?text=Handmade+Craft+3",
+        "https://placehold.co/400x300/b0b0b0/222222?text=Natural+Scene+4",
+        "https://placehold.co/400x300/a0a0a0/111111?text=Classic+Painting+5"
+    ];
+
+    // Function to show a custom message box
+    const showMessageBox = (message, type = 'info') => {
+        if (messageBoxRef.current) {
+            messageBoxRef.current.innerHTML = message;
+            messageBoxRef.current.className = `p-4 mt-4 rounded-lg shadow-md text-center transition-all duration-300 ease-in-out ${
+                type === 'success' ? 'bg-green-100 text-green-800' :
+                type === 'error' ? 'bg-red-100 text-red-800' :
+                'bg-blue-100 text-blue-800'
+            }`;
+            messageBoxRef.current.classList.remove('hidden', 'opacity-0');
+            messageBoxRef.current.classList.add('opacity-100');
+
+            setTimeout(() => {
+                messageBoxRef.current.classList.remove('opacity-100');
+                messageBoxRef.current.classList.add('opacity-0');
+                setTimeout(() => {
+                    messageBoxRef.current.classList.add('hidden');
+                }, 300); // Allow fade-out to complete
+            }, 3000); // Message disappears after 3 seconds
         }
-    </style>
-</head>
-<body>
-    <div id="root"></div> <!-- This is where your React app will be mounted -->
+    };
 
-    <!-- React and ReactDOM CDNs -->
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <!-- Babel CDN for JSX transformation in the browser (for development only) -->
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    // Firebase Initialization and Authentication
+    useEffect(() => {
+        const initializeFirebase = async () => {
+            try {
+                // Ensure __firebase_config is defined (provided by Canvas)
+                const firebaseConfig = typeof __firebase_config !== 'undefined'
+                    ? JSON.parse(__firebase_config)
+                    : {}; // Fallback if not defined, though it should be
 
-    <script type="text/babel">
-        // Your React App Component (copied directly from the previous immersive)
-        const App = () => {
-            // State variables
-            const [content, setContent] = React.useState(''); // The text content to be displayed
-            const [isAI, setIsAI] = React.useState(false); // True if current content is AI, false if human
-            const [score, setScore] = React.useState(0); // User's correct answers
-            const [totalQuestions, setTotalQuestions] = React.useState(0); // Total questions attempted
-            const [feedback, setFeedback] = React.useState(''); // Feedback message (correct/incorrect)
-            const [showAnswer, setShowAnswer] = React.useState(false); // Whether to show the correct answer
-            const [isLoading, setIsLoading] = React.useState(false); // Loading state for API calls
-
-            // Ref for the message box
-            const messageBoxRef = React.useRef(null);
-
-            // Pre-defined human-written content
-            const humanContent = [
-                "The quick brown fox jumps over the lazy dog. This is a classic pangram often used to test typewriters and computer fonts.",
-                "To be, or not to be, that is the question: Whether 'tis nobler in the mind to suffer The slings and arrows of outrageous fortune, Or to take Arms against a Sea of troubles, And by opposing end them: to die, to sleep no more.",
-                "It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness, it was the epoch of belief, it was the epoch of incredulity.",
-                "The early bird catches the worm, but the second mouse gets the cheese. Always consider different perspectives.",
-                "In the realm of personal growth, consistency often trumps intensity. Small, regular efforts yield significant long-term results."
-            ];
-
-            // Function to show a custom message box
-            const showMessageBox = (message, type = 'info') => {
-                if (messageBoxRef.current) {
-                    messageBoxRef.current.innerHTML = message;
-                    messageBoxRef.current.className = `p-4 mt-4 rounded-lg shadow-md text-center transition-all duration-300 ease-in-out ${
-                        type === 'success' ? 'bg-green-100 text-green-800' :
-                        type === 'error' ? 'bg-red-100 text-red-800' :
-                        'bg-blue-100 text-blue-800'
-                    }`;
-                    messageBoxRef.current.classList.remove('hidden', 'opacity-0');
-                    messageBoxRef.current.classList.add('opacity-100');
-
-                    setTimeout(() => {
-                        messageBoxRef.current.classList.remove('opacity-100');
-                        messageBoxRef.current.classList.add('opacity-0');
-                        setTimeout(() => {
-                            messageBoxRef.current.classList.add('hidden');
-                        }, 300); // Allow fade-out to complete
-                    }, 3000); // Message disappears after 3 seconds
+                if (Object.keys(firebaseConfig).length === 0) {
+                    console.error("Firebase config not found. Cannot initialize Firebase.");
+                    showMessageBox("Firebase setup failed. Data saving disabled.", 'error');
+                    setIsAuthReady(true); // Still allow app to run
+                    return;
                 }
-            };
 
-            // Function to fetch AI-generated content from Gemini API
-            const fetchAIContent = async () => {
-                setIsLoading(true);
-                setFeedback('');
-                setShowAnswer(false);
-                try {
-                    const prompt = "Write a short, engaging paragraph (around 50-80 words) on a random topic, making it sound as natural as possible, like a human wrote it. Do not include any introductory phrases like 'Here is a paragraph about...' or 'I've written a paragraph on...'";
-                    let chatHistory = [];
-                    chatHistory.push({ role: "user", parts: [{ text: prompt }] });
-                    const payload = { contents: chatHistory };
-                    const apiKey = ""; // Canvas will provide this key at runtime
-                    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+                const app = initializeApp(firebaseConfig);
+                const firestoreDb = getFirestore(app);
+                const firebaseAuth = getAuth(app);
 
-                    const response = await fetch(apiUrl, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    });
-                    const result = await response.json();
+                setDb(firestoreDb);
+                setAuth(firebaseAuth);
 
-                    if (result.candidates && result.candidates.length > 0 &&
-                        result.candidates[0].content && result.candidates[0].content.parts &&
-                        result.candidates[0].content.parts.length > 0) {
-                        const text = result.candidates[0].content.parts[0].text;
-                        setContent(text);
-                        setIsAI(true);
+                // Sign in anonymously or with custom token
+                if (typeof __initial_auth_token !== 'undefined') {
+                    await signInWithCustomToken(firebaseAuth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(firebaseAuth);
+                }
+
+                // Listen for auth state changes to get the current user ID
+                onAuthStateChanged(firebaseAuth, (user) => {
+                    if (user) {
+                        setUserId(user.uid);
                     } else {
-                        console.error("Gemini API response structure unexpected:", result);
-                        showMessageBox("Failed to generate AI content. Please try again.", 'error');
-                        // Fallback to human content if API fails
-                        loadNextContent();
+                        // Fallback if no user or signed out, use a random ID for unauthenticated
+                        setUserId(crypto.randomUUID());
                     }
-                } catch (error) {
-                    console.error("Error fetching AI content:", error);
-                    showMessageBox("Error connecting to AI service. Please try again.", 'error');
-                    // Fallback to human content if API fails
-                    loadNextContent();
-                } finally {
-                    setIsLoading(false);
-                }
-            };
+                    setIsAuthReady(true); // Authentication process is complete
+                });
 
-            // Function to load the next piece of content (randomly AI or human)
-            const loadNextContent = () => {
-                setShowAnswer(false);
-                setFeedback('');
-                const chooseAI = Math.random() < 0.5; // 50% chance for AI content
-
-                if (chooseAI) {
-                    fetchAIContent();
-                } else {
-                    const randomIndex = Math.floor(Math.random() * humanContent.length);
-                    setContent(humanContent[randomIndex]);
-                    setIsAI(false);
-                    setIsLoading(false); // Ensure loading is false when setting human content
-                }
-            };
-
-            // Handle user's guess
-            const handleGuess = (guessIsAI) => {
-                setTotalQuestions(prev => prev + 1);
-                setShowAnswer(true);
-
-                if (guessIsAI === isAI) {
-                    setScore(prev => prev + 1);
-                    setFeedback('Correct! 🎉');
-                    showMessageBox('Correct! 🎉', 'success');
-                } else {
-                    setFeedback('Incorrect. 😔');
-                    showMessageBox('Incorrect. 😔', 'error');
-                }
-            };
-
-            // Load initial content on component mount
-            React.useEffect(() => {
-                loadNextContent();
-            }, []);
-
-            return (
-                <div className="min-h-screen bg-gradient-to-br from-purple-50 to-indigo-100 flex items-center justify-center p-4 font-inter">
-                    <div className="bg-white p-8 rounded-2xl shadow-xl max-w-2xl w-full border border-gray-200">
-                        <h1 className="text-4xl font-bold text-center text-gray-800 mb-6 drop-shadow-sm">
-                            AI vs. Human Content Detector
-                        </h1>
-
-                        <p className="text-lg text-gray-600 text-center mb-8">
-                            Read the text below and decide if it was written by an AI or a human.
-                        </p>
-
-                        {isLoading ? (
-                            <div className="flex justify-center items-center h-40">
-                                <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-purple-500"></div>
-                                <p className="ml-4 text-gray-700 text-lg">Loading content...</p>
-                            </div>
-                        ) : (
-                            <div className="bg-gray-50 p-6 rounded-xl border border-gray-200 mb-6 min-h-[120px] flex items-center justify-center">
-                                <p className="text-xl text-gray-800 text-center leading-relaxed">
-                                    {content}
-                                </p>
-                            </div>
-                        )}
-
-                        <div className="flex justify-center space-x-4 mb-6">
-                            <button
-                                onClick={() => handleGuess(true)}
-                                disabled={isLoading || showAnswer}
-                                className="flex-1 py-3 px-6 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-lg shadow-md transition-all duration-200 ease-in-out transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                <span role="img" aria-label="robot" className="mr-2">🤖</span> AI
-                            </button>
-                            <button
-                                onClick={() => handleGuess(false)}
-                                disabled={isLoading || showAnswer}
-                                className="flex-1 py-3 px-6 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg shadow-md transition-all duration-200 ease-in-out transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                <span role="img" aria-label="person" className="mr-2">🚶</span> Human
-                            </button>
-                        </div>
-
-                        {showAnswer && (
-                            <div className="text-center mb-6">
-                                <p className={`text-2xl font-bold ${feedback.includes('Correct') ? 'text-green-600' : 'text-red-600'}`}>
-                                    {feedback}
-                                </p>
-                                <p className="text-lg text-gray-700 mt-2">
-                                    The content was: <span className="font-semibold">{isAI ? 'AI Generated' : 'Human Written'}</span>
-                                </p>
-                            </div>
-                        )}
-
-                        <div className="text-center text-xl font-medium text-gray-700 mb-6">
-                            Score: {score} / {totalQuestions}
-                        </div>
-
-                        <div className="flex justify-center">
-                            <button
-                                onClick={loadNextContent}
-                                disabled={isLoading}
-                                className="py-3 px-8 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-lg shadow-sm transition-all duration-200 ease-in-out transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                Next Content
-                            </button>
-                        </div>
-
-                        {/* Custom Message Box */}
-                        <div
-                            ref={messageBoxRef}
-                            className="hidden opacity-0"
-                            aria-live="polite" // Announce changes to screen readers
-                        ></div>
-                    </div>
-                </div>
-            );
+            } catch (error) {
+                console.error("Error initializing or authenticating Firebase:", error);
+                showMessageBox("Firebase initialization failed. Data saving disabled.", 'error');
+                setIsAuthReady(true); // Still allow app to run even if auth fails
+            }
         };
 
-        // Render the App component into the 'root' div
-        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
-    </script>
-</body>
-</html>
+        initializeFirebase();
+    }, []); // Run only once on mount
+
+    // Function to fetch AI-generated image from Gemini API
+    const fetchAIImage = async () => {
+        setIsLoading(true);
+        setFeedback('');
+        setShowAnswer(false);
+        try {
+            const prompt = "Generate a unique, abstract image with a focus on vibrant colors and flowing shapes. Make it look visually distinct from a photograph or traditional art.";
+            const payload = { instances: { prompt: prompt }, parameters: { "sampleCount": 1 } };
+            const apiKey = ""; // Canvas will provide this key at runtime
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${apiKey}`;
+
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const result = await response.json();
+
+            if (result.predictions && result.predictions.length > 0 && result.predictions[0].bytesBase64Encoded) {
+                const imgData = result.predictions[0].bytesBase64Encoded;
+                setImageUrl(`data:image/png;base64,${imgData}`);
+                setIsAIImage(true);
+            } else {
+                console.error("Image generation API response structure unexpected:", result);
+                showMessageBox("Failed to generate AI image. Please try again.", 'error');
+                // Fallback to human image if API fails
+                loadNextImage();
+            }
+        } catch (error) {
+            console.error("Error fetching AI image:", error);
+            showMessageBox("Error connecting to AI image service. Please try again.", 'error');
+            // Fallback to human image if API fails
+            loadNextImage();
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    // Function to load the next image (randomly AI or human)
+    const loadNextImage = () => {
+        setShowAnswer(false);
+        setFeedback('');
+        const chooseAI = Math.random() < 0.5; // 50% chance for AI image
+
+        if (chooseAI) {
+            fetchAIImage();
+        } else {
+            const randomIndex = Math.floor(Math.random() * humanImageUrls.length);
+            setImageUrl(humanImageUrls[randomIndex]);
+            setIsAIImage(false);
+            setIsLoading(false); // Ensure loading is false when setting human content
+        }
+    };
+
+    // Save guess data to Firestore
+    const saveGuessToFirestore = async (currentImageUrl, currentIsAIImage, userGuess) => {
+        if (!db || !userId) {
+            console.warn("Firestore not initialized or userId not available. Cannot save guess.");
+            showMessageBox("Cannot save guess. Firebase not ready.", 'error');
+            return;
+        }
+
+        setIsSaving(true);
+        try {
+            const isCorrect = (userGuess === currentIsAIImage);
+            const guessesCollectionRef = collection(db, `artifacts/${__app_id}/users/${userId}/guesses`);
+            await addDoc(guessesCollectionRef, {
+                userId: userId,
+                imageUrl: currentImageUrl,
+                isAIImage: currentIsAIImage,
+                userGuessIsAI: userGuess,
+                isCorrect: isCorrect,
+                timestamp: serverTimestamp()
+            });
+            showMessageBox("Guess saved!", 'success');
+        } catch (e) {
+            console.error("Error adding document to Firestore: ", e);
+            showMessageBox("Failed to save guess. Please try again.", 'error');
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    // Handle user's guess
+    const handleGuess = async (guessIsAI) => {
+        // Capture current state values before any state updates
+        const currentImageUrl = imageUrl;
+        const currentIsAIImage = isAIImage;
+
+        setTotalQuestions(prev => prev + 1);
+        setShowAnswer(true);
+
+        if (guessIsAI === currentIsAIImage) {
+            setScore(prev => prev + 1);
+            setFeedback('Correct! 🎉');
+            showMessageBox('Correct! 🎉', 'success');
+        } else {
+            setFeedback('Incorrect. 😔');
+            showMessageBox('Incorrect. 😔', 'error');
+        }
+
+        // Save the guess to Firestore after authentication is ready
+        if (isAuthReady) {
+            await saveGuessToFirestore(currentImageUrl, currentIsAIImage, guessIsAI);
+        } else {
+            console.warn("Authentication not ready, not saving to Firestore yet.");
+            showMessageBox("Authentication not ready, not saving to Firestore.", 'info');
+        }
+    };
+
+    // Load initial image on component mount once Firebase auth is ready
+    useEffect(() => {
+        if (isAuthReady) {
+            loadNextImage();
+        }
+    }, [isAuthReady]); // Depend on isAuthReady to ensure Firebase is set up
+
+    return (
+        <div className="min-h-screen bg-gradient-to-br from-purple-50 to-indigo-100 flex items-center justify-center p-4 font-inter">
+            <div className="bg-white p-8 rounded-2xl shadow-xl max-w-2xl w-full border border-gray-200">
+                <h1 className="text-4xl font-bold text-center text-gray-800 mb-6 drop-shadow-sm">
+                    AI vs. Human Image Detector
+                </h1>
+
+                <p className="text-lg text-gray-600 text-center mb-4">
+                    Read the image below and decide if it was created by an AI or a human.
+                </p>
+                {userId && (
+                    <p className="text-sm text-gray-500 text-center mb-6">
+                        Your User ID: <span className="font-mono bg-gray-100 px-2 py-1 rounded">{userId}</span>
+                    </p>
+                )}
+
+
+                {isLoading ? (
+                    <div className="flex flex-col items-center justify-center h-64 bg-gray-50 rounded-xl border border-gray-200 mb-6">
+                        <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-purple-500"></div>
+                        <p className="ml-4 text-gray-700 text-lg mt-4">Generating image...</p>
+                    </div>
+                ) : (
+                    <div className="bg-gray-50 p-4 rounded-xl border border-gray-200 mb-6 min-h-[250px] flex items-center justify-center overflow-hidden">
+                        {imageUrl ? (
+                            <img
+                                src={imageUrl}
+                                alt={isAIImage ? "AI Generated" : "Human Created"}
+                                className="max-w-full max-h-60 rounded-lg shadow-md object-contain"
+                                onError={(e) => {
+                                    e.target.onerror = null; // prevents infinite loop
+                                    e.target.src = "https://placehold.co/400x300/ff0000/ffffff?text=Image+Load+Error";
+                                    showMessageBox("Image failed to load. Showing placeholder.", 'error');
+                                }}
+                            />
+                        ) : (
+                            <p className="text-xl text-gray-500">No image available. Click "Next Image"!</p>
+                        )}
+                    </div>
+                )}
+
+                <div className="flex justify-center space-x-4 mb-6">
+                    <button
+                        onClick={() => handleGuess(true)}
+                        disabled={isLoading || showAnswer || !imageUrl}
+                        className="flex-1 py-3 px-6 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-lg shadow-md transition-all duration-200 ease-in-out transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        <span role="img" aria-label="robot" className="mr-2">🤖</span> AI
+                    </button>
+                    <button
+                        onClick={() => handleGuess(false)}
+                        disabled={isLoading || showAnswer || !imageUrl}
+                        className="flex-1 py-3 px-6 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg shadow-md transition-all duration-200 ease-in-out transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        <span role="img" aria-label="person" className="mr-2">🚶</span> Human
+                    </button>
+                </div>
+
+                {showAnswer && (
+                    <div className="text-center mb-6">
+                        <p className={`text-2xl font-bold ${feedback.includes('Correct') ? 'text-green-600' : 'text-red-600'}`}>
+                            {feedback}
+                        </p>
+                        <p className="text-lg text-gray-700 mt-2">
+                            The image was: <span className="font-semibold">{isAIImage ? 'AI Generated' : 'Human Created'}</span>
+                        </p>
+                    </div>
+                )}
+
+                <div className="text-center text-xl font-medium text-gray-700 mb-6">
+                    Score: {score} / {totalQuestions}
+                </div>
+
+                <div className="flex justify-center">
+                    <button
+                        onClick={loadNextImage}
+                        disabled={isLoading || isSaving}
+                        className="py-3 px-8 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-lg shadow-sm transition-all duration-200 ease-in-out transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        {isLoading ? "Generating..." : "Next Image"}
+                    </button>
+                </div>
+
+                {/* Saving indicator */}
+                {isSaving && (
+                    <div className="text-center mt-4 text-blue-600 text-lg">
+                        Saving your guess...
+                    </div>
+                )}
+
+                {/* Custom Message Box */}
+                <div
+                    ref={messageBoxRef}
+                    className="hidden opacity-0"
+                    aria-live="polite" // Announce changes to screen readers
+                ></div>
+            </div>
+            {/* Tailwind CSS CDN */}
+            <script src="https://cdn.tailwindcss.com"></script>
+            {/* Google Fonts - Inter */}
+            <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+            <style>
+                {`
+                body {
+                    font-family: 'Inter', sans-serif;
+                }
+                `}
+            </style>
+        </div>
+    );
+};
+
+export default App;
