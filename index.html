@@ -30,7 +30,7 @@
 
 
         <div id="imageContainer" class="bg-gray-50 p-4 rounded-xl border border-gray-200 mb-6 min-h-[250px] flex items-center justify-center overflow-hidden">
-            <!-- Image or loading spinner will be injected here -->
+            <!-- Image will be injected here -->
         </div>
 
         <div class="flex justify-center space-x-4 mb-6">
@@ -66,51 +66,12 @@
         <div id="messageBox" class="hidden opacity-0" aria-live="polite"></div>
     </div>
 
-    <!-- Firebase SDKs -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-        // Global variables for application state
-        let db = null;
-        let auth = null;
-        let currentUserId = null;
-        let isAuthReady = false;
-
-        let currentImageUrl = '';
-        let currentIsAIImage = false;
-        let currentScore = 0;
-        let currentTotalQuestions = 0;
-        let isLoading = false;
-        let isSaving = false;
-        let showAnswer = false;
-
-        // DOM Elements
-        const imageContainer = document.getElementById('imageContainer');
-        const aiButton = document.getElementById('aiButton');
-        const humanButton = document.getElementById('humanButton');
-        const nextImageButton = document.getElementById('nextImageButton');
-        const scoreDisplay = document.getElementById('scoreDisplay');
-        const totalQuestionsDisplay = document.getElementById('totalQuestionsDisplay');
-        const feedbackContainer = document.getElementById('feedbackContainer');
-        const feedbackMessage = document.getElementById('feedbackMessage');
-        const correctAnswer = document.getElementById('correctAnswer');
+    <script>
+        // Global variables for message box and UI elements
         const messageBox = document.getElementById('messageBox');
-        const savingIndicator = document.getElementById('savingIndicator');
-        const userIdDisplay = document.getElementById('userIdDisplay');
 
-        // Pre-defined human-created image URLs (using placeholder images for demonstration)
-        const humanImageUrls = [
-            "https://drive.google.com/file/d/1VoZ6lM3E2Ys2fgOVRYdBf4-njIdwzmA2/view?usp=sharing",
-            "https://placehold.co/400x300/d0d0d0/444444?text=Human+Photo+2",
-            "https://placehold.co/400x300/c0c0c0/333333?text=Handmade+Craft+3",
-            "https://placehold.co/400x300/b0b0b0/222222?text=Natural+Scene+4",
-            "https://placehold.co/400x300/a0a0a0/111111?text=Classic+Painting+5"
-        ];
-
-        // Function to show a custom message box
-        const showMessageBox = (message, type = 'info') => {
+        // Function to show a custom message box (globally accessible)
+        window.showMessageBox = (message, type = 'info') => {
             messageBox.innerHTML = message;
             messageBox.className = `p-4 mt-4 rounded-lg shadow-md text-center transition-all duration-300 ease-in-out ${
                 type === 'success' ? 'bg-green-100 text-green-800' :
@@ -128,49 +89,103 @@
                 }, 300); // Allow fade-out to complete
             }, 3000); // Message disappears after 3 seconds
         };
+    </script>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables for application state
+        let db = null;
+        let auth = null;
+        let currentUserId = null;
+        let isAuthReady = false;
+
+        let currentImageUrl = '';
+        let currentIsAIImage = false; // true if current image is from AI folder, false if from human folder
+        let currentScore = 0;
+        let currentTotalQuestions = 0;
+        let isSaving = false; // Only saving to Firestore now, no image generation loading
+        let showAnswer = false;
+        let feedbackText = ''; // New variable to hold feedback message
+        let feedbackIsCorrect = false; // New variable to hold feedback correctness
+
+        // DOM Elements
+        const imageContainer = document.getElementById('imageContainer');
+        const aiButton = document.getElementById('aiButton');
+        const humanButton = document.getElementById('humanButton');
+        const nextImageButton = document.getElementById('nextImageButton');
+        const scoreDisplay = document.getElementById('scoreDisplay');
+        const totalQuestionsDisplay = document.getElementById('totalQuestionsDisplay');
+        const feedbackContainer = document.getElementById('feedbackContainer');
+        const feedbackMessage = document.getElementById('feedbackMessage');
+        const correctAnswer = document.getElementById('correctAnswer');
+        const savingIndicator = document.getElementById('savingIndicator');
+        const userIdDisplay = document.getElementById('userIdDisplay');
+
+        // IMPORTANT:
+        // Replace these with actual paths to your image files once uploaded to your hosting.
+        // Make sure these folders (human-images, ai-images) exist in your website's root.
+        const humanImageUrls = [
+            "./human-images/human-photo-1.jpg",
+            "./human-images/human-art-2.png",
+            "./human-images/human-drawing-3.jpeg",
+            "./human-images/human-portrait-4.jpg",
+            "./human-images/human-landscape-5.png"
+            // Add more relative paths to your human-created images here
+        ];
+
+        const aiImageUrls = [
+            "./ai-images/ai-abstract-1.jpg",
+            "./ai-images/ai-fantasy-2.png",
+            "./ai-images/ai-futuristic-3.jpeg",
+            "./ai-images/ai-geometric-4.jpg",
+            "./ai-images/ai-dreamscape-5.png"
+            // Add more relative paths to your AI-generated images here
+        ];
 
         // Function to update UI based on state
         const updateUI = () => {
             scoreDisplay.textContent = currentScore;
             totalQuestionsDisplay.textContent = currentTotalQuestions;
 
-            aiButton.disabled = isLoading || showAnswer || !currentImageUrl;
-            humanButton.disabled = isLoading || showAnswer || !currentImageUrl;
-            nextImageButton.disabled = isLoading || isSaving;
-            nextImageButton.textContent = isLoading ? "Generating..." : "Next Image";
+            // Buttons are disabled if an answer is shown or no image is loaded
+            aiButton.disabled = showAnswer || !currentImageUrl;
+            humanButton.disabled = showAnswer || !currentImageUrl;
+            nextImageButton.disabled = isSaving; // Only saving affects this button
+            nextImageButton.textContent = "Next Image";
 
-            if (isLoading) {
-                imageContainer.innerHTML = `
-                    <div class="flex flex-col items-center justify-center h-full">
-                        <div class="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-purple-500"></div>
-                        <p class="ml-4 text-gray-700 text-lg mt-4">Generating image...</p>
-                    </div>
-                `;
-            } else if (currentImageUrl) {
+            // Display image or placeholder message
+            if (currentImageUrl) {
                 imageContainer.innerHTML = `
                     <img src="${currentImageUrl}" alt="${currentIsAIImage ? "AI Generated" : "Human Created"}"
                          class="max-w-full max-h-60 rounded-lg shadow-md object-contain"
-                         onerror="this.onerror=null;this.src='https://placehold.co/400x300/ff0000/ffffff?text=Image+Load+Error'; showMessageBox('Image failed to load. Showing placeholder.', 'error');">
+                         onerror="window.showMessageBox('Image failed to load. Showing placeholder.', 'error'); this.onerror=null;this.src='https://placehold.co/400x300/ff0000/ffffff?text=Image+Load+Error';">
                 `;
             } else {
                 imageContainer.innerHTML = `<p class="text-xl text-gray-500">No image available. Click "Next Image"!</p>`;
             }
 
+            // Show/hide feedback section
             if (showAnswer) {
                 feedbackContainer.classList.remove('hidden');
-                feedbackMessage.textContent = feedbackMessage.currentText; // Set by handleGuess
-                feedbackMessage.className = `text-2xl font-bold ${feedbackMessage.isCorrect ? 'text-green-600' : 'text-red-600'}`;
+                feedbackMessage.textContent = feedbackText;
+                feedbackMessage.className = `text-2xl font-bold ${feedbackIsCorrect ? 'text-green-600' : 'text-red-600'}`;
                 correctAnswer.textContent = `The image was: ${currentIsAIImage ? 'AI Generated' : 'Human Created'}`;
             } else {
                 feedbackContainer.classList.add('hidden');
             }
 
+            // Show/hide saving indicator
             if (isSaving) {
                 savingIndicator.classList.remove('hidden');
             } else {
                 savingIndicator.classList.add('hidden');
             }
 
+            // Display user ID
             if (currentUserId) {
                 userIdDisplay.textContent = `Your User ID: ${currentUserId}`;
                 userIdDisplay.classList.remove('hidden');
@@ -179,67 +194,40 @@
             }
         };
 
-        // Function to fetch AI-generated image from Gemini API
-        const fetchAIImage = async () => {
-            isLoading = true;
-            showAnswer = false; // Hide previous answer
-            updateUI(); // Update UI to show loading state
-
-            try {
-                const prompt = "Generate a unique, abstract image with a focus on vibrant colors and flowing shapes. Make it look visually distinct from a photograph or traditional art.";
-                const payload = { instances: { prompt: prompt }, parameters: { "sampleCount": 1 } };
-                const apiKey = ""; // Canvas will provide this key at runtime
-                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${apiKey}`;
-
-                const response = await fetch(apiUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                const result = await response.json();
-
-                if (result.predictions && result.predictions.length > 0 && result.predictions[0].bytesBase64Encoded) {
-                    const imgData = result.predictions[0].bytesBase64Encoded;
-                    currentImageUrl = `data:image/png;base64,${imgData}`;
-                    currentIsAIImage = true;
-                } else {
-                    console.error("Image generation API response structure unexpected:", result);
-                    showMessageBox("Failed to generate AI image. Please try again.", 'error');
-                    // Fallback to human image if API fails
-                    loadNextImage();
-                }
-            } catch (error) {
-                console.error("Error fetching AI image:", error);
-                showMessageBox("Error connecting to AI image service. Please try again.", 'error');
-                // Fallback to human image if API fails
-                loadNextImage();
-            } finally {
-                isLoading = false;
-                updateUI(); // Update UI to show new image or fallback
-            }
-        };
-
-        // Function to load the next image (randomly AI or human)
+        // Function to load the next image (randomly AI or human from local folders)
         const loadNextImage = () => {
-            showAnswer = false;
+            showAnswer = false; // Reset answer display
             const chooseAI = Math.random() < 0.5; // 50% chance for AI image
 
             if (chooseAI) {
-                fetchAIImage();
+                // Ensure there are AI images to pick from
+                if (aiImageUrls.length > 0) {
+                    const randomIndex = Math.floor(Math.random() * aiImageUrls.length);
+                    currentImageUrl = aiImageUrls[randomIndex];
+                    currentIsAIImage = true;
+                } else {
+                    currentImageUrl = ''; // No AI images available
+                    window.showMessageBox("No AI images configured. Please add paths to ai-images folder.", 'error');
+                }
             } else {
-                const randomIndex = Math.floor(Math.random() * humanImageUrls.length);
-                currentImageUrl = humanImageUrls[randomIndex];
-                currentIsAIImage = false;
-                isLoading = false; // Ensure loading is false for human content
-                updateUI(); // Update UI to show new human image
+                // Ensure there are human images to pick from
+                if (humanImageUrls.length > 0) {
+                    const randomIndex = Math.floor(Math.random() * humanImageUrls.length);
+                    currentImageUrl = humanImageUrls[randomIndex];
+                    currentIsAIImage = false;
+                } else {
+                    currentImageUrl = ''; // No human images available
+                    window.showMessageBox("No human images configured. Please add paths to human-images folder.", 'error');
+                }
             }
+            updateUI(); // Update UI to show new image or message
         };
 
         // Save guess data to Firestore
         const saveGuessToFirestore = async (imageUrlToSave, isAIImageToSave, userGuessIsAI) => {
             if (!db || !currentUserId) {
                 console.warn("Firestore not initialized or userId not available. Cannot save guess.");
-                showMessageBox("Cannot save guess. Firebase not ready.", 'error');
+                window.showMessageBox("Cannot save guess. Firebase not ready.", 'error');
                 return;
             }
 
@@ -248,7 +236,8 @@
 
             try {
                 const isCorrect = (userGuessIsAI === isAIImageToSave);
-                const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // Use global appId
+                // Use the global __app_id provided by the environment
+                const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
                 const guessesCollectionRef = collection(db, `artifacts/${appId}/users/${currentUserId}/guesses`);
                 await addDoc(guessesCollectionRef, {
                     userId: currentUserId,
@@ -258,10 +247,10 @@
                     isCorrect: isCorrect,
                     timestamp: serverTimestamp()
                 });
-                showMessageBox("Guess saved!", 'success');
+                window.showMessageBox("Guess saved!", 'success');
             } catch (e) {
                 console.error("Error adding document to Firestore: ", e);
-                showMessageBox("Failed to save guess. Please try again.", 'error');
+                window.showMessageBox("Failed to save guess. Please try again.", 'error');
             } finally {
                 isSaving = false;
                 updateUI(); // Hide saving indicator
@@ -270,7 +259,7 @@
 
         // Handle user's guess
         const handleGuess = async (guessIsAI) => {
-            // Capture current state values before any potential re-renders or changes
+            // Capture current state values before any potential changes
             const imageUrlToSave = currentImageUrl;
             const isAIImageToSave = currentIsAIImage;
 
@@ -278,8 +267,8 @@
             showAnswer = true;
 
             const isCorrect = (guessIsAI === isAIImageToSave);
-            feedbackMessage.currentText = isCorrect ? 'Correct! 🎉' : 'Incorrect. 😔';
-            feedbackMessage.isCorrect = isCorrect; // Store correctness for class setting
+            feedbackText = isCorrect ? 'Correct! 🎉' : 'Incorrect. 😔';
+            feedbackIsCorrect = isCorrect;
 
             if (isCorrect) {
                 currentScore++;
@@ -292,7 +281,7 @@
                 await saveGuessToFirestore(imageUrlToSave, isAIImageToSave, guessIsAI);
             } else {
                 console.warn("Authentication not ready, not saving to Firestore yet.");
-                showMessageBox("Authentication not ready, not saving to Firestore.", 'info');
+                window.showMessageBox("Authentication not ready, not saving to Firestore.", 'info');
             }
         };
 
@@ -305,7 +294,7 @@
 
                 if (Object.keys(firebaseConfig).length === 0) {
                     console.error("Firebase config not found. Cannot initialize Firebase.");
-                    showMessageBox("Firebase setup failed. Data saving disabled.", 'error');
+                    window.showMessageBox("Firebase setup failed. Data saving disabled.", 'error');
                     isAuthReady = true;
                     updateUI();
                     return;
@@ -336,7 +325,7 @@
 
             } catch (error) {
                 console.error("Error initializing or authenticating Firebase:", error);
-                showMessageBox("Firebase initialization failed. Data saving disabled.", 'error');
+                window.showMessageBox("Firebase initialization failed. Data saving disabled.", 'error');
                 isAuthReady = true;
                 updateUI();
             }
