@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI vs. Human Content Detector</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts - Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        /* Custom styles for the body to ensure Inter font is applied */
+        body {
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div> <!-- This is where your React app will be mounted -->
+
+    <!-- React and ReactDOM CDNs -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel CDN for JSX transformation in the browser (for development only) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <script type="text/babel">
+        // Your React App Component (copied directly from the previous immersive)
+        const App = () => {
+            // State variables
+            const [content, setContent] = React.useState(''); // The text content to be displayed
+            const [isAI, setIsAI] = React.useState(false); // True if current content is AI, false if human
+            const [score, setScore] = React.useState(0); // User's correct answers
+            const [totalQuestions, setTotalQuestions] = React.useState(0); // Total questions attempted
+            const [feedback, setFeedback] = React.useState(''); // Feedback message (correct/incorrect)
+            const [showAnswer, setShowAnswer] = React.useState(false); // Whether to show the correct answer
+            const [isLoading, setIsLoading] = React.useState(false); // Loading state for API calls
+
+            // Ref for the message box
+            const messageBoxRef = React.useRef(null);
+
+            // Pre-defined human-written content
+            const humanContent = [
+                "The quick brown fox jumps over the lazy dog. This is a classic pangram often used to test typewriters and computer fonts.",
+                "To be, or not to be, that is the question: Whether 'tis nobler in the mind to suffer The slings and arrows of outrageous fortune, Or to take Arms against a Sea of troubles, And by opposing end them: to die, to sleep no more.",
+                "It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness, it was the epoch of belief, it was the epoch of incredulity.",
+                "The early bird catches the worm, but the second mouse gets the cheese. Always consider different perspectives.",
+                "In the realm of personal growth, consistency often trumps intensity. Small, regular efforts yield significant long-term results."
+            ];
+
+            // Function to show a custom message box
+            const showMessageBox = (message, type = 'info') => {
+                if (messageBoxRef.current) {
+                    messageBoxRef.current.innerHTML = message;
+                    messageBoxRef.current.className = `p-4 mt-4 rounded-lg shadow-md text-center transition-all duration-300 ease-in-out ${
+                        type === 'success' ? 'bg-green-100 text-green-800' :
+                        type === 'error' ? 'bg-red-100 text-red-800' :
+                        'bg-blue-100 text-blue-800'
+                    }`;
+                    messageBoxRef.current.classList.remove('hidden', 'opacity-0');
+                    messageBoxRef.current.classList.add('opacity-100');
+
+                    setTimeout(() => {
+                        messageBoxRef.current.classList.remove('opacity-100');
+                        messageBoxRef.current.classList.add('opacity-0');
+                        setTimeout(() => {
+                            messageBoxRef.current.classList.add('hidden');
+                        }, 300); // Allow fade-out to complete
+                    }, 3000); // Message disappears after 3 seconds
+                }
+            };
+
+            // Function to fetch AI-generated content from Gemini API
+            const fetchAIContent = async () => {
+                setIsLoading(true);
+                setFeedback('');
+                setShowAnswer(false);
+                try {
+                    const prompt = "Write a short, engaging paragraph (around 50-80 words) on a random topic, making it sound as natural as possible, like a human wrote it. Do not include any introductory phrases like 'Here is a paragraph about...' or 'I've written a paragraph on...'";
+                    let chatHistory = [];
+                    chatHistory.push({ role: "user", parts: [{ text: prompt }] });
+                    const payload = { contents: chatHistory };
+                    const apiKey = ""; // Canvas will provide this key at runtime
+                    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    const result = await response.json();
+
+                    if (result.candidates && result.candidates.length > 0 &&
+                        result.candidates[0].content && result.candidates[0].content.parts &&
+                        result.candidates[0].content.parts.length > 0) {
+                        const text = result.candidates[0].content.parts[0].text;
+                        setContent(text);
+                        setIsAI(true);
+                    } else {
+                        console.error("Gemini API response structure unexpected:", result);
+                        showMessageBox("Failed to generate AI content. Please try again.", 'error');
+                        // Fallback to human content if API fails
+                        loadNextContent();
+                    }
+                } catch (error) {
+                    console.error("Error fetching AI content:", error);
+                    showMessageBox("Error connecting to AI service. Please try again.", 'error');
+                    // Fallback to human content if API fails
+                    loadNextContent();
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+
+            // Function to load the next piece of content (randomly AI or human)
+            const loadNextContent = () => {
+                setShowAnswer(false);
+                setFeedback('');
+                const chooseAI = Math.random() < 0.5; // 50% chance for AI content
+
+                if (chooseAI) {
+                    fetchAIContent();
+                } else {
+                    const randomIndex = Math.floor(Math.random() * humanContent.length);
+                    setContent(humanContent[randomIndex]);
+                    setIsAI(false);
+                    setIsLoading(false); // Ensure loading is false when setting human content
+                }
+            };
+
+            // Handle user's guess
+            const handleGuess = (guessIsAI) => {
+                setTotalQuestions(prev => prev + 1);
+                setShowAnswer(true);
+
+                if (guessIsAI === isAI) {
+                    setScore(prev => prev + 1);
+                    setFeedback('Correct! 🎉');
+                    showMessageBox('Correct! 🎉', 'success');
+                } else {
+                    setFeedback('Incorrect. 😔');
+                    showMessageBox('Incorrect. 😔', 'error');
+                }
+            };
+
+            // Load initial content on component mount
+            React.useEffect(() => {
+                loadNextContent();
+            }, []);
+
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-purple-50 to-indigo-100 flex items-center justify-center p-4 font-inter">
+                    <div className="bg-white p-8 rounded-2xl shadow-xl max-w-2xl w-full border border-gray-200">
+                        <h1 className="text-4xl font-bold text-center text-gray-800 mb-6 drop-shadow-sm">
+                            AI vs. Human Content Detector
+                        </h1>
+
+                        <p className="text-lg text-gray-600 text-center mb-8">
+                            Read the text below and decide if it was written by an AI or a human.
+                        </p>
+
+                        {isLoading ? (
+                            <div className="flex justify-center items-center h-40">
+                                <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-purple-500"></div>
+                                <p className="ml-4 text-gray-700 text-lg">Loading content...</p>
+                            </div>
+                        ) : (
+                            <div className="bg-gray-50 p-6 rounded-xl border border-gray-200 mb-6 min-h-[120px] flex items-center justify-center">
+                                <p className="text-xl text-gray-800 text-center leading-relaxed">
+                                    {content}
+                                </p>
+                            </div>
+                        )}
+
+                        <div className="flex justify-center space-x-4 mb-6">
+                            <button
+                                onClick={() => handleGuess(true)}
+                                disabled={isLoading || showAnswer}
+                                className="flex-1 py-3 px-6 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-lg shadow-md transition-all duration-200 ease-in-out transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                <span role="img" aria-label="robot" className="mr-2">🤖</span> AI
+                            </button>
+                            <button
+                                onClick={() => handleGuess(false)}
+                                disabled={isLoading || showAnswer}
+                                className="flex-1 py-3 px-6 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg shadow-md transition-all duration-200 ease-in-out transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                <span role="img" aria-label="person" className="mr-2">🚶</span> Human
+                            </button>
+                        </div>
+
+                        {showAnswer && (
+                            <div className="text-center mb-6">
+                                <p className={`text-2xl font-bold ${feedback.includes('Correct') ? 'text-green-600' : 'text-red-600'}`}>
+                                    {feedback}
+                                </p>
+                                <p className="text-lg text-gray-700 mt-2">
+                                    The content was: <span className="font-semibold">{isAI ? 'AI Generated' : 'Human Written'}</span>
+                                </p>
+                            </div>
+                        )}
+
+                        <div className="text-center text-xl font-medium text-gray-700 mb-6">
+                            Score: {score} / {totalQuestions}
+                        </div>
+
+                        <div className="flex justify-center">
+                            <button
+                                onClick={loadNextContent}
+                                disabled={isLoading}
+                                className="py-3 px-8 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-lg shadow-sm transition-all duration-200 ease-in-out transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                Next Content
+                            </button>
+                        </div>
+
+                        {/* Custom Message Box */}
+                        <div
+                            ref={messageBoxRef}
+                            className="hidden opacity-0"
+                            aria-live="polite" // Announce changes to screen readers
+                        ></div>
+                    </div>
+                </div>
+            );
+        };
+
+        // Render the App component into the 'root' div
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>
